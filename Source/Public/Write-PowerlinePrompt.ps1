@@ -36,19 +36,25 @@ function Write-PowerlinePrompt {
             for($b = 0; $b -lt $Prompt.Count; $b++) {
                 $block = $Global:Prompt[$b]
                 try {
-                    $block = & $block
+                    $outputBlock = . {
+                        [CmdletBinding()]param()
+                         & $block
+                    } -ErrorVariable logging
                     $buffer = $(
-                        if($block -as [PoshCode.Pansies.Text[]]) {
-                            [PoshCode.Pansies.Text[]]$block
+                        if($outputBlock -as [PoshCode.Pansies.Text[]]) {
+                            [PoshCode.Pansies.Text[]]$outputBlock
                         } else {
-                            [PoshCode.Pansies.Text[]][string[]]$block
+                            [PoshCode.Pansies.Text[]][string[]]$outputBlock
                         }
                     ).Where{ ![string]::IsNullOrEmpty($_.Object) }
-
                     # Each $buffer gets a color, if it needs one (it's not whitespace)
-                    $UniqueColorsCount += [bool]$buffer.Where({![string]::IsNullOrWhiteSpace($_.Object) -and $_.BackgroundColor -eq $null -and $_.ForegroundColor -eq $null }, 1)
+                    $UniqueColorsCount += [bool]$buffer.Where({ !([string]::IsNullOrWhiteSpace($_.Object)) -and !$_.BackgroundColor -and !$_.ForegroundColor }, 1)
                     , $buffer
-                # Capture errors from blocks. We'll find a way to display them...
+
+                    # Capture errors from blocks. We'll find a way to display them...
+                    if ($logging) {
+                        $PromptErrors.Add("$b {$block}", $logging)
+                    }
                 } catch {
                     $PromptErrors.Add("$b {$block}", $_)
                 }
@@ -77,7 +83,7 @@ function Write-PowerlinePrompt {
         foreach ($block in $PromptText) {
             $ColorUsed = $False
             foreach ($b in @($block)) {
-                if (![string]::IsNullOrWhiteSpace($b.Object) -and $b.BackgroundColor -eq $null) {
+                if (![string]::IsNullOrWhiteSpace($b.Object) -and $null -eq $b.BackgroundColor) {
                     $b.BackgroundColor = $Colors[$ColorIndex]
                     $ColorUsed = $True
                 }
@@ -85,7 +91,7 @@ function Write-PowerlinePrompt {
             $ColorIndex += $ColorUsed
 
             foreach ($b in @($block)) {
-                if ($b.BackgroundColor -ne $null -and $b.ForegroundColor -eq $null) {
+                if ($null -ne $b.BackgroundColor -and $null -eq $b.ForegroundColor) {
                     if($Script:PowerLineConfig.FullColor) {
                         $b.ForegroundColor = Get-Complement $b.BackgroundColor -ForceContrast
                     } else {
@@ -96,7 +102,8 @@ function Write-PowerlinePrompt {
         }
 
         ## Finally, unroll all the output and join into one string (using separators and spacing)
-        $Buffer = $PromptText | % { $_ }
+        $Buffer = $PromptText | ForEach-Object { $_ }
+        $extraLineCount = 0
         $line = ""
         $result = ""
         $RightAligned = $False
@@ -107,7 +114,7 @@ function Write-PowerlinePrompt {
         for ($b = 0; $b -lt $Buffer.Count; $b++) {
             $block = $Buffer[$b]
             $string = $block.ToString()
-            #Write-Debug "STEP $b of $($Buffer.Count) [$(($String -replace "\u001B.*?\p{L}").Length)] $($String -replace "\u001B.*?\p{L}" -replace "`n","{newline}" -replace "`t","{tab}")"
+            # Write-Debug "STEP $b of $($Buffer.Count) [$(($String -replace "\u001B.*?\p{L}").Length)] $($String -replace "\u001B.*?\p{L}" -replace "`n","{newline}" -replace "`t","{tab}")"
 
             ## Allow `t to split into (2) columns:
             if ($string -eq "`t") {
@@ -142,6 +149,7 @@ function Write-PowerlinePrompt {
                         BackgroundColor = $Host.UI.RawUI.BackgroundColor
                     }
                 }
+                $extraLineCount++
                 $result += $line + "`n"
                 $line = ""
                 $ColorSeparator = "&ColorSeparator;"
@@ -174,14 +182,15 @@ function Write-PowerlinePrompt {
             }
         }
 
-        [string]$PromptErrorString = if ($Script:PowerLineConfig.HideErrors) {
+        [string]$PromptErrorString = if (-not $Script:PowerLineConfig.HideErrors) {
             WriteExceptions $PromptErrors
         }
         # At the end, output everything as one single string
+        # create the number of lines we need for output up front:
+        ("`n" * $extraLineCount) + ("$([char]27)M" * $extraLineCount) +
         $PromptErrorString + $result + $line + ([PoshCode.Pansies.Text]@{
-            Object          = "$ColorSeparator&Clear;"
+            Object          = "$([char]27)[49m$ColorSeparator&Clear;"
             ForegroundColor = $LastBackground
-            BackgroundColor = $Host.UI.RawUI.BackgroundColor
         })
     } catch {
         Write-Warning "Exception in PowerLinePrompt`n$_"
